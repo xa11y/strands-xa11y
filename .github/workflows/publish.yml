@@ -1,15 +1,40 @@
 name: Publish to PyPI
 
-# Fires when a GitHub release is published. hatch-vcs takes the version from the tag,
-# so tag releases as v0.1.0 and nothing needs bumping by hand.
+# Follows the shape of the xa11y repo's publish workflows: dispatched by hand with a
+# bump level, and the workflow itself creates the tag, publishes, and cuts the GitHub
+# release. Nothing has to be tagged or released by hand first.
+#
+# There is deliberately no `release: published` trigger. The create-release job at the
+# bottom would re-enter this workflow and publish the same version a second time.
+#
+# Unlike pytest-xa11y there is no version in pyproject.toml to bump: hatch-vcs reads it
+# from the tag, so computing the next tag *is* the bump.
+
 on:
-  release:
-    types: [published]
+  workflow_dispatch:
+    inputs:
+      level:
+        description: "Version bump level"
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+          - release # publish the version already tagged at HEAD, without bumping
+
+# Two concurrent publishes would race on the tag and on PyPI.
+concurrency:
+  group: publish
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
+  # Runs before the tag exists, unlike the xa11y workflow, which tags first. Ordering it
+  # this way means a red suite leaves no tag behind to clean up — and hatch-vcs does not
+  # need the tag to run the checks, only to build.
   check:
     name: Run checks
     runs-on: ubuntu-latest
@@ -23,14 +48,84 @@ jobs:
       - run: pip install hatch
       - run: hatch run prepare
 
-  build:
-    name: Build distribution
+  version:
+    name: Resolve version and tag
     needs: check
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      # A tag cut from a feature branch would publish that branch's tree under a release
+      # version, and hatch-vcs would bake it into the wheel with no sign anything was off.
+      - name: Refuse to release from anywhere but main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Releases are cut from main; this run is on ${{ github.ref }}."
+          exit 1
+
+      - name: Resolve version
+        id: resolve
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.level }}" = "release" ]; then
+            # No bump: HEAD must already carry the tag to publish.
+            TAG=$(git tag --points-at HEAD --list 'v*' | sort -V | tail -n1)
+            if [ -z "$TAG" ]; then
+              echo "::error::level=release needs a v* tag on HEAD; there is none."
+              exit 1
+            fi
+            VERSION="${TAG#v}"
+          else
+            # With no tags at all this floors at 0.0.0, so the first `minor` run is v0.1.0.
+            LATEST=$(git tag --list 'v*' --sort=-v:refname | head -n1)
+            BASE="${LATEST#v}"
+            BASE="${BASE:-0.0.0}"
+            IFS=. read -r MAJOR MINOR PATCH <<<"$BASE"
+            case "${{ inputs.level }}" in
+              patch) PATCH=$((PATCH + 1)) ;;
+              minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+              major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+            esac
+            VERSION="$MAJOR.$MINOR.$PATCH"
+            TAG="v$VERSION"
+            if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+              echo "::error::$TAG already exists."
+              exit 1
+            fi
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "releasing $TAG"
+
+      - name: Tag
+        if: inputs.level != 'release'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.resolve.outputs.tag }}" \
+            -m "strands-xa11y ${{ steps.resolve.outputs.version }}"
+          git push origin "${{ steps.resolve.outputs.tag }}"
+
+  build:
+    name: Build distribution
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      # The tag, never main: checking out a branch would let whatever landed between the
+      # tag push and this checkout into the sdist, so the artifact would not be the tree
+      # the tag points at. It is also what makes hatch-vcs emit a clean version rather
+      # than a `.devN+g<sha>` one.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.version.outputs.tag }}
       - uses: actions/setup-python@v7
         with:
           python-version: '3.10'
@@ -38,6 +133,15 @@ jobs:
       - run: hatch build
       - name: Check distribution
         run: twine check dist/*
+      - name: Refuse to publish a dev version
+        # hatch-vcs silently falls back to a dev version if the tag is missing at build
+        # time, and PyPI would take it. Better to fail here than to burn the number.
+        run: |
+          ls dist/
+          if ls dist/ | grep -q 'dev'; then
+            echo "::error::Built a dev version — expected ${{ needs.version.outputs.version }}."
+            exit 1
+          fi
       - uses: actions/upload-artifact@v7
         with:
           name: python-package-distributions
@@ -45,7 +149,7 @@ jobs:
 
   publish:
     name: Publish to PyPI
-    needs: build
+    needs: [version, build]
     runs-on: ubuntu-latest
     environment:
       name: pypi
@@ -57,4 +161,37 @@ jobs:
           name: python-package-distributions
           path: dist/
       - name: Publish to PyPI
+        # Pinned by digest rather than xa11y's floating `release/v1`: this job holds an
+        # OIDC token that can publish to PyPI, so the tag it resolves to should not be
+        # able to move under us.
         uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # v1.13.0
+        with:
+          packages-dir: dist/
+          skip-existing: true
+
+  create-release:
+    name: Create GitHub Release
+    needs: [version, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.version.outputs.tag }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: python-package-distributions
+          path: dist/
+      # Auto-generated notes rather than the AI-classified pipeline the xa11y release
+      # uses: that prompt is written about the xa11y public API and would misclassify
+      # changes to this package's tools.
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ needs.version.outputs.tag }}" \
+            --title "strands-xa11y ${{ needs.version.outputs.version }}" \
+            --generate-notes \
+            dist/*
