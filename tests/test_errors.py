@@ -8,7 +8,14 @@ import pytest
 from strands_xa11y._actions import run
 from strands_xa11y._errors import describe
 from strands_xa11y._session import require_consent
-from strands_xa11y.models import ClickAction, ElementTarget, FindAction, PointerTarget, ScreenshotAction
+from strands_xa11y.models import (
+    ClickAction,
+    ElementTarget,
+    FindAction,
+    MouseAction,
+    PointerTarget,
+    ScreenshotAction,
+)
 
 
 def text_of(result) -> str:
@@ -41,10 +48,41 @@ def test_diagnosis_is_passed_through_verbatim():
         (fake_xa11y.AccessibilityNotEnabledError("empty"), "--force-renderer-accessibility"),
         (fake_xa11y.ActionNotSupportedError("no"), "'actions' list"),
         (fake_xa11y.InvalidSelectorError("bad"), "snake_case"),
+        (fake_xa11y.InvalidActionDataError("range"), "out-of-range"),
+        (fake_xa11y.PlatformError("busy"), "modal"),
+        (fake_xa11y.SelectorNotMatchedError("no match"), "near misses above"),
+        (fake_xa11y.TimeoutError("timed out"), "last observed"),
     ],
 )
 def test_each_failure_mode_carries_its_fix(error, expected):
     assert expected in describe(error)
+
+
+def test_an_unknown_failure_is_still_named_rather_than_swallowed():
+    message = describe(RuntimeError("something odd"))
+    assert message == "RuntimeError: something odd"
+
+
+def test_a_message_ending_in_a_colon_keeps_it():
+    """The message is xa11y's; trimming it would drop real content off the end."""
+    assert describe(RuntimeError("AXError -25204:")) == "RuntimeError: AXError -25204:"
+
+
+def test_an_exception_with_no_message_is_just_its_name():
+    assert describe(fake_xa11y.PlatformError()).splitlines()[0] == "PlatformError"
+
+
+def test_guidance_is_inherited_from_the_nearest_matching_base_class():
+    class VendorSpecificPermissionDeniedError(fake_xa11y.PermissionDeniedError):
+        pass
+
+    assert "Privacy & Security" in describe(VendorSpecificPermissionDeniedError("nope"))
+
+
+def test_a_diagnosis_with_no_fields_set_adds_nothing_to_the_message():
+    message = describe(fake_xa11y.SelectorNotMatchedError("no match"))
+    assert "near misses:" not in message
+    assert "search scope:" not in message
 
 
 def test_run_converts_backend_errors_into_tool_results(editor):
@@ -78,6 +116,58 @@ def test_sending_pixels_to_the_model_does_ask(editor, monkeypatch):
 
     assert run(ScreenshotAction(type="screenshot"))["status"] == "success"
     assert run(ScreenshotAction(type="screenshot", send_image=True))["status"] == "error"
+
+
+def test_writing_pixels_to_disk_also_asks(editor, monkeypatch, tmp_path):
+    """save_path puts whatever is on screen into a file; that leaves the process too."""
+    monkeypatch.setenv("BYPASS_TOOL_CONSENT", "false")
+    monkeypatch.setattr("builtins.input", lambda _: "n")
+    monkeypatch.setattr("strands_xa11y._session.sys.stdin", type("Stdin", (), {"isatty": lambda self: True})())
+
+    path = tmp_path / "shot.png"
+    assert run(ScreenshotAction(type="screenshot", save_path=str(path)))["status"] == "error"
+    assert not path.exists()
+
+
+def test_consent_granted_lets_the_action_through(editor, monkeypatch):
+    monkeypatch.setenv("BYPASS_TOOL_CONSENT", "false")
+    monkeypatch.setattr("builtins.input", lambda _: "Y")
+    monkeypatch.setattr("strands_xa11y._session.sys.stdin", type("Stdin", (), {"isatty": lambda self: True})())
+
+    result = run(ClickAction(type="click", target=PointerTarget(app="TextEdit", selector="button[name='Bold']")))
+    assert result["status"] == "success"
+
+
+@pytest.mark.parametrize("setting", ["TRUE", "True", "true"])
+def test_the_bypass_is_case_insensitive(editor, monkeypatch, setting):
+    monkeypatch.setenv("BYPASS_TOOL_CONSENT", setting)
+    monkeypatch.setattr("builtins.input", lambda _: pytest.fail("the bypass should have skipped the prompt"))
+    assert (
+        run(ClickAction(type="click", target=PointerTarget(app="TextEdit", selector="button[name='Bold']")))["status"]
+        == "success"
+    )
+
+
+def test_the_consent_summary_leaves_out_fields_the_caller_never_set(editor, monkeypatch):
+    """The prompt is for a human to read, so it shows the request, not the whole schema."""
+    monkeypatch.setenv("BYPASS_TOOL_CONSENT", "false")
+    prompts = []
+    monkeypatch.setattr("builtins.input", lambda prompt: prompts.append(prompt) or "y")
+    monkeypatch.setattr("strands_xa11y._session.sys.stdin", type("Stdin", (), {"isatty": lambda self: True})())
+
+    run(ClickAction(type="click", target=PointerTarget(app="TextEdit", selector="button[name='Bold']")))
+    assert "button=" not in prompts[0]  # left at its default
+    assert "count=" not in prompts[0]
+
+
+def test_an_action_with_nothing_but_a_type_still_summarises(editor, monkeypatch):
+    monkeypatch.setenv("BYPASS_TOOL_CONSENT", "false")
+    prompts = []
+    monkeypatch.setattr("builtins.input", lambda prompt: prompts.append(prompt) or "y")
+    monkeypatch.setattr("strands_xa11y._session.sys.stdin", type("Stdin", (), {"isatty": lambda self: True})())
+
+    run(MouseAction(type="mouse", op="down"))
+    assert "mouse" in prompts[0]
 
 
 def test_without_a_terminal_consent_is_refused_not_assumed(monkeypatch):

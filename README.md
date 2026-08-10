@@ -109,7 +109,9 @@ The restriction is in the schema, not a runtime check, so there is no acting act
 
 Anything that changes the machine — clicking, typing, launching, terminating — asks for confirmation on the terminal first. Set `BYPASS_TOOL_CONSENT=true` to hand approval to your agent runtime instead, which is what you want when the runtime has its own approval UX or when running unattended. With no terminal to ask on and no bypass set, the action is refused rather than assumed.
 
-Reading the tree never prompts. `screenshot` does prompt when `send_image=true`, because that ships whatever is on the user's screen into the transcript; screenshots are withheld from the model by default, and images over 5MB are dropped rather than sent.
+Reading the tree never prompts. `screenshot` prompts when the capture leaves the process — `send_image=true` puts whatever is on the user's screen into the transcript, and `save_path` writes it to disk. Screenshots are withheld from the model by default, and images over 5MB are dropped rather than sent.
+
+`close_app` terminates every process whose name contains the string you give it, so it takes the most specific name you have and never signals the process hosting the agent.
 
 ## Errors are meant to be read
 
@@ -138,9 +140,12 @@ Usually enough for the model to fix its own selector without falling back to pix
 ```bash
 pip install hatch
 hatch run prepare   # format, lint, typecheck, test
+hatch run cov       # the same tests, with a coverage report
 ```
 
-Tests run against a fake accessibility backend — including a small selector evaluator — so they need no display, no bus, and no windows.
+Tests run against a fake accessibility backend — including a small selector evaluator — so they need no display, no bus, and no windows. The suite covers every statement in `src/`, and CI fails below that, so a new branch arrives with the test that exercises it.
+
+CI runs the suite on Python 3.10–3.13, checks formatting, lint, and types, builds the wheel, and imports the package on macOS, Windows, and Linux to prove both tool schemas build everywhere the package claims to run. A weekly canary re-runs it against the latest `strands-agents` and `xa11y` so SDK drift breaks here before it breaks anyone's install.
 
 ## License
 

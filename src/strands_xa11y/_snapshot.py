@@ -163,12 +163,31 @@ def collect_rich(
     except Exception:  # noqa: BLE001 - same
         return node
 
-    segments = _child_segments(children, lambda child: child.role, lambda child: child.name)
+    def role_of(child: Any) -> str:
+        try:
+            return str(child.role)
+        except Exception:  # noqa: BLE001 - the path segment for a node that is already gone
+            return "unknown"
+
+    def name_of(child: Any) -> Optional[str]:
+        try:
+            name: Optional[str] = child.name
+            return name
+        except Exception:  # noqa: BLE001 - same
+            return None
+
+    # Read defensively: these run outside the per-node guard below, so an element that
+    # vanished mid-walk would otherwise take the whole snapshot down with it.
+    segments = _child_segments(children, role_of, name_of)
     for child, child_segment in zip(children, segments, strict=False):
         collected = collect_rich(child, depth - 1, budget, _join(base_path, child_segment), include_bounds)
-        if collected is None:
+        if collected is not None:
+            node.children.append(collected)
+        elif budget.truncated:
+            # Out of budget: stop the whole walk, which the caller reports. A child that
+            # merely vanished mid-walk costs only itself — dropping its later siblings too
+            # would silently hand back a tree that looks complete.
             break
-        node.children.append(collected)
     return node
 
 
@@ -189,7 +208,7 @@ def collect_basic(raw: Dict[str, Any], depth: int, budget: _Budget, base_path: O
     segments = _child_segments(children, lambda child: child.get("role") or "unknown", lambda child: child.get("name"))
     for child, child_segment in zip(children, segments, strict=False):
         collected = collect_basic(child, depth - 1, budget, _join(base_path, child_segment))
-        if collected is None:
+        if collected is None:  # a dict node cannot fail to read, so this is always the budget
             break
         node.children.append(collected)
     return node
