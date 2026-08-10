@@ -2,7 +2,7 @@
 
 Drive native desktop applications from a [Strands](https://strandsagents.com) agent — through the operating system's accessibility tree, not screenshots.
 
-Agents already have Playwright-backed tools for the browser. This is the same idea for native apps: **Playwright for the desktop**. Built on [xa11y](https://xa11y.dev), which speaks AXUIElement on macOS, UI Automation on Windows, and AT-SPI2 on Linux behind one API.
+Accessibility APIs are the most robust way to control a desktop — they expose the same structured tree of roles, names, and states that assistive technology uses — and this library drives them with Playwright-style selectors, so targets survive a UI that moves, restyles, or re-renders between turns. Built on [xa11y](https://xa11y.dev), which speaks AXUIElement on macOS, UI Automation on Windows, and AT-SPI2 on Linux behind one API.
 
 ```python
 from strands import Agent
