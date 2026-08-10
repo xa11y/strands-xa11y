@@ -28,25 +28,28 @@ jobs:
       fail-fast: false
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
           cache: 'pip'
       - run: pip install hatch
-      - run: hatch run test
+      # The fake accessibility backend makes every branch reachable on a headless runner,
+      # so the suite is held at full statement and branch cover rather than a floor that
+      # drifts down. `cov` fails the job below 100%.
+      - run: hatch run cov
 
   lint:
     name: Lint
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.10'
           cache: 'pip'
@@ -65,10 +68,10 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
       fail-fast: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
       - name: Install
@@ -78,15 +81,46 @@ jobs:
         # and that both tool schemas build on every platform we claim to support.
         run: python -c "from strands_xa11y import use_desktop, inspect_desktop; assert use_desktop.tool_spec['inputSchema']"
 
+  # The tests import from src/ via pythonpath, so nothing above would notice a packaging
+  # mistake — a module left out of the wheel, or a README that breaks the PyPI render.
+  # publish.yml finds those at release time, which is too late to be useful.
+  package:
+    name: Package
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+      - run: pip install hatch twine
+      - run: hatch build
+      - name: Check distribution metadata
+        run: twine check dist/*
+      - name: Import from the built wheel
+        # Installed from the wheel rather than the source tree, so a module missing from
+        # the package list fails here instead of on a user's machine.
+        run: |
+          python -m venv /tmp/wheel-check
+          /tmp/wheel-check/bin/pip install dist/*.whl
+          /tmp/wheel-check/bin/python -c "
+          from strands_xa11y import use_desktop, inspect_desktop
+          from strands_xa11y import _actions, _errors, _refs, _session, _snapshot, models
+          assert {'use_desktop', 'inspect_desktop'} == {use_desktop.tool_name, inspect_desktop.tool_name}
+          "
+
   sdk-compat:
     name: Latest SDK compatibility
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.10'
           cache: 'pip'

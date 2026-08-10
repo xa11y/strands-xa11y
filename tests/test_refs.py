@@ -58,3 +58,14 @@ def test_selector_preference_puts_stable_id_first():
 
 def test_a_ref_with_neither_selector_has_none_to_offer():
     assert Ref(ref="e1", app_key="pid:1", role="button").selectors() == []
+
+
+def test_an_unquotable_stable_id_is_skipped_rather_than_producing_a_broken_selector():
+    """A stable_id containing both quote characters has no representation in a selector."""
+    ref = Ref(ref="e1", app_key="pid:1", role="button", stable_id="""id"with'both""", path="window > button")
+    assert ref.selectors() == ["window > button"]
+
+
+def test_describe_names_an_element_that_has_a_name_and_falls_back_when_it_does_not():
+    assert Ref(ref="e1", app_key="pid:1", role="button", name="Save").describe() == 'e1 (button "Save")'
+    assert Ref(ref="e2", app_key="pid:1", role="group").describe() == "e2 (group)"

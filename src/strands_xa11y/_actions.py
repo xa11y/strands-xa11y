@@ -7,6 +7,7 @@ have no accessibility equivalent — global shortcuts, drags, scroll wheels.
 
 from __future__ import annotations
 
+import os
 import platform
 import subprocess
 from typing import Any, Callable, Dict, List
@@ -259,8 +260,16 @@ def _reconcile_checked(resolved: Resolved, wanted: str) -> Dict[str, Any]:
 
 
 def _key(action: models.KeyAction) -> Dict[str, Any]:
+    # Keystrokes go wherever focus happens to be, so a failed raise is not cosmetic — it
+    # sends the sequence to the wrong application. Report it instead of swallowing it.
+    focus_note = ""
     if action.app:
-        focus_app(resolve_app(action.app))
+        app = resolve_app(action.app)
+        if not focus_app(app):
+            focus_note = (
+                f" WARNING: {app.name} could not be brought to the foreground, so these keys may "
+                f"have gone to another application. Check with 'snapshot' before continuing."
+            )
     keys = normalize_keys(action.keys)
     held = normalize_keys(action.hold)
     sim = xa11y().input_sim()
@@ -271,7 +280,7 @@ def _key(action: models.KeyAction) -> Dict[str, Any]:
             else:
                 sim.press(key)
     combo = "+".join(held + [" ".join(keys)]) if held else " ".join(keys)
-    return success_result(f"Sent {combo}" + (f" x{action.repeat}" if action.repeat > 1 else "") + ".")
+    return success_result(f"Sent {combo}" + (f" x{action.repeat}" if action.repeat > 1 else "") + "." + focus_note)
 
 
 def _mouse(action: models.MouseAction) -> Dict[str, Any]:
@@ -348,7 +357,9 @@ def _open_app(action: models.OpenAppAction) -> Dict[str, Any]:
         command = [action.name]
 
     try:
-        process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        # Both pipes are discarded rather than captured: nothing here ever reads them, and an
+        # unread PIPE deadlocks the child as soon as it fills its buffer.
+        process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except (OSError, ValueError) as exc:
         raise ToolError(f"Could not launch {action.name!r}: {exc}") from exc
 
@@ -376,15 +387,19 @@ def _close_app(action: models.CloseAppAction) -> Dict[str, Any]:
             "Closing applications needs psutil. Install it with: pip install 'strands-xa11y[process]'"
         ) from exc
 
+    # The sweep matches on a substring, so it would happily terminate the process hosting this
+    # agent — 'python', 'node' and 'code' all match something. Exclude ourselves explicitly.
+    own_pid = os.getpid()
     closed = []
     for process in psutil.process_iter(["pid", "name"]):
         name = process.info.get("name") or ""
-        if action.name.lower() in name.lower():
-            try:
-                process.terminate()
-                closed.append(f"{name} (pid {process.info['pid']})")
-            except psutil.Error as exc:  # noqa: PERF203 - per-process failures should not abort the sweep
-                closed.append(f"{name}: failed to terminate ({exc})")
+        if process.info["pid"] == own_pid or action.name.lower() not in name.lower():
+            continue
+        try:
+            process.terminate()
+            closed.append(f"{name} (pid {process.info['pid']})")
+        except psutil.Error as exc:  # noqa: PERF203 - per-process failures should not abort the sweep
+            closed.append(f"{name}: failed to terminate ({exc})")
     if not closed:
         return success_result(f"No running process matches {action.name!r}.")
     return success_result(f"Terminated {len(closed)} process(es): " + ", ".join(closed))
@@ -419,10 +434,15 @@ def summarize(action: Any) -> str:
 
 
 def needs_consent(action: Any) -> bool:
-    """Whether an action changes the machine's state, or ships pixels to the model."""
+    """Whether an action changes the machine's state, or ships pixels somewhere.
+
+    A screenshot is read-only right up until it leaves the process: ``send_image`` puts
+    whatever is on the user's screen into the transcript, and ``save_path`` writes it to
+    disk. Both are decisions to ask about; capturing and describing one is not.
+    """
     if action.type in models.MUTATING_ACTIONS:
         return True
-    return bool(action.type == "screenshot" and action.send_image)
+    return bool(action.type == "screenshot" and (action.send_image or action.save_path))
 
 
 def run(action: Any) -> Dict[str, Any]:

@@ -106,6 +106,12 @@ class SnapshotAction(BaseModel):
     )
     include_bounds: bool = Field(default=False, description="Append each node's on-screen rectangle.")
 
+    @model_validator(mode="after")
+    def _one_scope(self) -> "SnapshotAction":
+        if self.selector is not None and self.ref is not None:
+            raise ValueError("scope the snapshot with 'selector' or 'ref', not both")
+        return self
+
 
 class FindAction(BaseModel):
     """Query for every element matching a selector."""
@@ -307,7 +313,7 @@ class OpenAppAction(BaseModel):
     """Launch an application and wait for it to register with the accessibility bridge."""
 
     type: Literal["open_app"] = Field(description="Launch an application and wait until it is reachable")
-    name: str = Field(description="Application name or executable.")
+    name: str = Field(min_length=1, description="Application name or executable.")
     timeout: float = Field(default=30.0, ge=0, description="Seconds to wait for the app to become reachable.")
 
 
@@ -315,7 +321,14 @@ class CloseAppAction(BaseModel):
     """Terminate an application's processes."""
 
     type: Literal["close_app"] = Field(description="Terminate an application's processes")
-    name: str = Field(description="Application name to match against running processes.")
+    name: str = Field(
+        min_length=2,
+        description=(
+            "Application name to match against running process names, case-insensitively, as a "
+            "substring. Matching is deliberately broad, so give the most specific name you have — "
+            "every match is terminated."
+        ),
+    )
 
 
 PerceiveAction = Union[ListAppsAction, SnapshotAction, FindAction, ReadAction, WaitAction, ScreenshotAction]

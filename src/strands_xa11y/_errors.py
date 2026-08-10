@@ -38,6 +38,16 @@ _GUIDANCE = {
         "and '>' (direct child); position is :nth(1), 1-based."
     ),
     "InvalidActionDataError": "The action received an out-of-range value. Check offsets and numeric bounds.",
+    "SelectorNotMatchedError": (
+        "Nothing matched. The near misses above are the elements that came closest, and the search "
+        "scope is what was actually there — usually the name is slightly off, or the element lives "
+        "in a different application. Re-run 'snapshot' and read the tree rather than guessing again."
+    ),
+    "TimeoutError": (
+        "The condition never came true in time. 'last observed' distinguishes the two cases: a "
+        "selector that never matched is a targeting problem, while one that matched but stayed in "
+        "the wrong state means the UI is still working or the action meant to trigger it never landed."
+    ),
     "PlatformError": (
         "The OS accessibility layer returned an error. The app may be busy, mid-relaunch, or showing "
         "a modal that blocks queries. Retry, or re-run 'snapshot' to resync."
@@ -73,7 +83,10 @@ def _class_names(exc: BaseException) -> List[str]:
 def describe(exc: BaseException) -> str:
     """Render an exception as an agent-facing message."""
     names = _class_names(exc)
-    parts = [f"{names[0]}: {exc}".rstrip(": ")]
+    # str(exc) is empty for an exception raised with no message; anything else is kept
+    # verbatim, including a message that legitimately ends in a colon.
+    message = str(exc)
+    parts = [f"{names[0]}: {message}" if message else names[0]]
 
     diagnosis = []
     for field in _DIAGNOSIS_FIELDS:
