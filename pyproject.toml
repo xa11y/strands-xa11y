@@ -1,0 +1,101 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "strands-xa11y"
+dynamic = ["version"]
+description = "Drive native macOS, Windows, and Linux desktop apps from a Strands agent through the accessibility tree."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "xa11y contributors" }]
+keywords = [
+    "strands",
+    "strands-agents",
+    "agents",
+    "ai",
+    "tool",
+    "desktop-automation",
+    "accessibility",
+    "computer-use",
+    "xa11y",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Testing",
+]
+
+dependencies = [
+    "strands-agents>=1.0.0",
+    "pydantic>=2.0.0",
+    # Pre-1.0: the accessibility surface is still moving, so pin to a minor range.
+    "xa11y>=0.13.0,<0.14.0",
+]
+
+[project.optional-dependencies]
+# close_app terminates processes by name; xa11y itself never launches or kills them.
+process = ["psutil>=5.8.0,<8.0.0"]
+dev = [
+    "pytest>=8.0.0,<9.0.0",
+    "ruff>=0.11.0,<1.0.0",
+    "mypy>=1.15.0,<2.0.0",
+    "psutil>=5.8.0,<8.0.0",
+    "hatch",
+]
+
+[project.urls]
+Homepage = "https://github.com/xa11y/strands-xa11y"
+Documentation = "https://github.com/xa11y/strands-xa11y#readme"
+Repository = "https://github.com/xa11y/strands-xa11y"
+Issues = "https://github.com/xa11y/strands-xa11y/issues"
+"Upstream library" = "https://xa11y.dev/"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/strands_xa11y"]
+
+[tool.hatch.envs.default]
+features = ["dev"]
+
+[tool.hatch.envs.default.scripts]
+test = "pytest {args}"
+lint = "ruff check src tests"
+format = "ruff format src tests"
+typecheck = "mypy src"
+prepare = ["format", "lint", "typecheck", "test"]
+
+[tool.ruff]
+line-length = 120
+include = ["src/**/*.py", "tests/**/*.py"]
+
+[tool.ruff.lint]
+select = [
+    "E", # pycodestyle
+    "F", # pyflakes
+    "I", # isort
+    "B", # flake8-bugbear
+]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

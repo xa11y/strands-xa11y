@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    # Weekly canary. The dependency floor (strands-agents>=1.0.0) means new users always
+    # resolve the latest SDK, so SDK drift should break here before it breaks them.
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test - Python ${{ matrix.python-version }}
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+      fail-fast: false
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+      - run: pip install hatch
+      - run: hatch run test
+
+  lint:
+    name: Lint
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+      - run: pip install hatch
+      - name: Check formatting
+        run: hatch run format --check
+      - run: hatch run lint
+      - run: hatch run typecheck
+
+  import-on-every-platform:
+    name: Import - ${{ matrix.os }}
+    if: github.event_name != 'schedule'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install
+        run: pip install .
+      - name: Import the tools
+        # A headless runner cannot drive a desktop, but it can prove the package imports
+        # and that both tool schemas build on every platform we claim to support.
+        run: python -c "from strands_xa11y import use_desktop, inspect_desktop; assert use_desktop.tool_spec['inputSchema']"
+
+  sdk-compat:
+    name: Latest SDK compatibility
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+      - run: pip install hatch
+      - name: Update to the latest SDK and xa11y
+        run: |
+          hatch run pip install --upgrade strands-agents xa11y
+          hatch run pip show strands-agents xa11y
+      - run: hatch run typecheck
+      - run: hatch run test
